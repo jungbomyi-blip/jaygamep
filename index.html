@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>피카츄 슈퍼 어드벤처</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- 상단 헤더 -->
+    <header class="text-center mb-3">
+        <h1 class="text-3xl font-extrabold text-yellow-400 drop-shadow-md">⚡ 피카츄 슈퍼 어드벤처 ⚡</h1>
+        <p class="text-sm text-slate-300 mt-1">스페이스바/터치로 점프! 건물, 성벽, 산을 오르내리며 동전을 모으세요!</p>
+    </header>
+
+    <!-- 게임 캔버스 컨테이너 -->
+    <div class="relative rounded-2xl overflow-hidden shadow-2xl border-4 border-yellow-400 bg-sky-300">
+        <canvas id="gameCanvas" width="800" height="400" class="block"></canvas>
+
+        <!-- 시작 / BGM 활성화 버튼 (브라우저 자발적 오디오 재생 제한 해제용) -->
+        <div id="startOverlay" class="absolute inset-0 bg-black/60 flex flex-col items-center justify-center p-6 text-center backdrop-blur-sm z-20">
+            <h2 class="text-3xl font-black text-yellow-400 mb-4">🎮 게임 준비 완료!</h2>
+            <button id="startBtn" class="px-8 py-4 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-black rounded-2xl text-xl shadow-xl transform transition active:scale-95 animate-bounce">
+                ▶️ 게임 시작 (BGM ON)
+            </button>
+        </div>
+
+        <!-- 게임 오버 레이어 -->
+        <div id="gameOverScreen" class="hidden absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-center p-6 backdrop-blur-sm z-30">
+            <h2 class="text-4xl font-black text-red-500 mb-2">GAME OVER</h2>
+            <p id="finalScore" class="text-2xl font-bold text-yellow-300 mb-1">최종 점수: 0점</p>
+            <p id="finalCoin" class="text-lg font-semibold text-amber-400 mb-6">획득한 동전: 0개</p>
+            <button id="restartBtn" class="px-6 py-3 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-extrabold rounded-xl text-lg shadow-lg transform transition active:scale-95">
+                🔄 다시 도전하기
+            </button>
+        </div>
+    </div>
+
+    <!-- 스코어보드 -->
+    <div class="mt-4 flex gap-4 text-base font-bold">
+        <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700">
+            점수: <span id="scoreDisplay" class="text-yellow-400">0</span>
+        </div>
+        <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700">
+            🪙 동전: <span id="coinDisplay" class="text-amber-400">0</span>
+        </div>
+        <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700">
+            🏆 최고 기록: <span id="highScoreDisplay" class="text-green-400">0</span>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const coinDisplay = document.getElementById('coinDisplay');
+        const highScoreDisplay = document.getElementById('highScoreDisplay');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const startOverlay = document.getElementById('startOverlay');
+        const startBtn = document.getElementById('startBtn');
+        const finalScore = document.getElementById('finalScore');
+        const finalCoin = document.getElementById('finalCoin');
+        const restartBtn = document.getElementById('restartBtn');
+
+        let isGameRunning = false;
+        let score = 0;
+        let coins = 0;
+        let highScore = localStorage.getItem('pikachu_adv_high_score') || 0;
+        highScoreDisplay.textContent = highScore;
+
+        let gameSpeed = 4.5;
+        let frameCount = 0;
+
+        // Web Audio API 오디오 엔진 (사운드 및 BGM)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let bgmInterval = null;
+
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(160, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(450, audioCtx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.12);
+            } else if (type === 'coin') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(987.77, audioCtx.currentTime); // B5
+                osc.frequency.setValueAtTime(1318.51, audioCtx.currentTime + 0.08); // E6
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.25);
+            } else if (type === 'gameover') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(280, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + 0.4);
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.4);
+            }
+        }
+
+        // 레트로 8비트 BGM 메인 멜로디 루퍼
+        const bgmNotes = [
+            261.63, 329.63, 392.00, 523.25, 392.00, 329.63, 293.66, 349.23,
+            440.00, 587.33, 440.00, 349.23, 329.63, 392.00, 523.25, 659.25,
+            392.00, 329.63, 293.66, 329.63, 349.23, 392.00, 261.63, 0
+        ];
+        let bgmNoteIndex = 0;
+
+        function startBGM() {
+            if (bgmInterval) clearInterval(bgmInterval);
+            bgmNoteIndex = 0;
+            bgmInterval = setInterval(() => {
+                if (!isGameRunning) return;
+                const freq = bgmNotes[bgmNoteIndex];
+                if (freq > 0) {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.13);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.13);
+                }
+                bgmNoteIndex = (bgmNoteIndex + 1) % bgmNotes.length;
+            }, 150);
+        }
+
+        function stopBGM() {
+            if (bgmInterval) clearInterval(bgmInterval);
+        }
+
+        // 피카츄 SVG 이미지
+        const pikachuImg = new Image();
+        pikachuImg.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+                <polygon points="15,5 30,35 10,25" fill="#FACC15" />
+                <polygon points="15,5 22,18 10,25" fill="#000" />
+                <polygon points="85,5 70,35 90,25" fill="#FACC15" />
+                <polygon points="85,5 78,18 90,25" fill="#000" />
+                <ellipse cx="50" cy="55" rx="35" ry="30" fill="#FACC15" />
+                <circle cx="25" cy="62" r="8" fill="#EF4444" />
+                <circle cx="75" cy="62" r="8" fill="#EF4444" />
+                <circle cx="35" cy="50" r="5" fill="#000" />
+                <circle cx="33" cy="48" r="2" fill="#FFF" />
+                <circle cx="65" cy="50" r="5" fill="#000" />
+                <circle cx="63" cy="48" r="2" fill="#FFF" />
+                <polygon points="50,56 48,58 52,58" fill="#000" />
+                <path d="M43 63 Q50 68 57 63" stroke="#000" stroke-width="2" fill="none" />
+                <path d="M15 65 L5 55 L15 50 L8 40 L25 48" stroke="#FACC15" stroke-width="6" fill="none" stroke-linecap="round" />
+            </svg>
+        `);
+
+        // 플레이어 (피카츄)
+        const pikachu = {
+            x: 80,
+            y: 280,
+            width: 44,
+            height: 44,
+            velocityY: 0,
+            gravity: 0.65,
+            jumpPower: -12.5,
+            isGrounded: false,
+
+            jump() {
+                if (this.isGrounded) {
+                    this.velocityY = this.jumpPower;
+                    this.isGrounded = false;
+                    playSound('jump');
+                }
+            },
+
+            update(platforms) {
+                this.velocityY += this.gravity;
+                this.y += this.velocityY;
+
+                this.isGrounded = false;
+
+                // 바닥 착지
+                const groundY = canvas.height - 50 - this.height;
+                if (this.y >= groundY) {
+                    this.y = groundY;
+                    this.velocityY = 0;
+                    this.isGrounded = true;
+                }
+
+                // 발판(계단, 성벽, 건물, 산) 위에 착지 판정
+                platforms.forEach(plat => {
+                    const isAbove = (this.y + this.height - this.velocityY <= plat.y + 10);
+                    const isWithinX = (this.x + this.width > plat.x && this.x < plat.x + plat.width);
+
+                    if (isWithinX && isAbove && (this.y + this.height >= plat.y) && (this.y + this.height <= plat.y + 15)) {
+                        this.y = plat.y - this.height;
+                        this.velocityY = 0;
+                        this.isGrounded = true;
+                    }
+                });
+            },
+
+            draw() {
+                ctx.drawImage(pikachuImg, this.x, this.y, this.width, this.height);
+            }
+        };
+
+        // 지형(발판) 관리
+        let platforms = [];
+        let coinsList = [];
+        let obstacles = [];
+
+        class Platform {
+            constructor(x, y, width, height, type) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.type = type; // 'building', 'wall', 'mountain', 'stair'
+            }
+
+            update() {
+                this.x -= gameSpeed;
+            }
+
+            draw() {
+                ctx.save();
+                if (this.type === 'building') {
+                    // 회색 창문 건물
+                    ctx.fillStyle = '#475569';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.strokeStyle = '#334155';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(this.x, this.y, this.width, this.height);
+
+                    // 건물 창문 패턴
+                    ctx.fillStyle = '#FDE047';
+                    for (let wx = this.x + 10; wx < this.x + this.width - 10; wx += 20) {
+                        for (let wy = this.y + 10; wy < this.y + this.height - 10; wy += 25) {
+                            ctx.fillRect(wx, wy, 10, 12);
+                        }
+                    }
+                } else if (this.type === 'wall') {
+                    // 빨간 벽돌 성벽
+                    ctx.fillStyle = '#B91C1C';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.fillStyle = '#DC2626';
+                    for (let wy = this.y; wy < this.y + this.height; wy += 12) {
+                        ctx.fillRect(this.x, wy, this.width, 2);
+                    }
+                } else if (this.type === 'mountain') {
+                    // 바위 산 지형
+                    ctx.fillStyle = '#15803D';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.fillStyle = '#86EFAC';
+                    ctx.fillRect(this.x, this.y, this.width, 6); // 풀잎 상단
+                } else if (this.type === 'stair') {
+                    // 나무 계단 발판
+                    ctx.fillStyle = '#D97706';
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.fillStyle = '#F59E0B';
+                    ctx.fillRect(this.x, this.y, this.width, 4);
+                }
+                ctx.restore();
+            }
+        }
+
+        class Coin {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 10;
+                this.collected = false;
+            }
+
+            update() {
+                this.x -= gameSpeed;
+            }
+
+            draw() {
+                if (this.collected) return;
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#F59E0B';
+                ctx.fill();
+                ctx.strokeStyle = '#FEF08A';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // 동전 내부 ⚡ 표시
+                ctx.fillStyle = '#FFF';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('⚡', this.x, this.y);
+                ctx.restore();
+            }
+        }
+
+        class Obstacle {
+            constructor(x, y, width, height) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+            }
+
+            update() {
+                this.x -= gameSpeed;
+            }
+
+            draw() {
+                // 몬스터볼 모양 장애물
+                ctx.save();
+                ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+                const r = this.width / 2;
+
+                ctx.fillStyle = '#EF4444';
+                ctx.beginPath();
+                ctx.arc(0, 0, r, Math.PI, 0, false);
+                ctx.fill();
+
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI, false);
+                ctx.fill();
+
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(-r, -2, r * 2, 4);
+                ctx.beginPath();
+                ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(0, 0, r * 0.18, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 배경 구름
+        let clouds = [
+            { x: 100, y: 50, speed: 0.6 },
+            { x: 450, y: 80, speed: 0.4 },
+            { x: 750, y: 35, speed: 0.8 }
+        ];
+
+        function drawBackground() {
+            // 하늘 그라데이션
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGradient.addColorStop(0, '#38BDF8');
+            skyGradient.addColorStop(1, '#BAE6FD');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 원경 산
+            ctx.fillStyle = '#94A3B8';
+            ctx.beginPath();
+            ctx.moveTo(0, 350);
+            ctx.lineTo(150, 200);
+            ctx.lineTo(300, 350);
+            ctx.lineTo(500, 180);
+            ctx.lineTo(700, 350);
+            ctx.lineTo(800, 250);
+            ctx.lineTo(800, 350);
+            ctx.closePath();
+            ctx.fill();
+
+            // 구름
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+            clouds.forEach(cloud => {
+                cloud.x -= cloud.speed;
+                if (cloud.x < -100) cloud.x = canvas.width + 50;
+
+                ctx.beginPath();
+                ctx.arc(cloud.x, cloud.y, 22, 0, Math.PI * 2);
+                ctx.arc(cloud.x + 18, cloud.y - 10, 18, 0, Math.PI * 2);
+                ctx.arc(cloud.x + 36, cloud.y, 22, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 가장 하단 바닥 (땅)
+            ctx.fillStyle = '#16A34A';
+            ctx.fillRect(0, canvas.height - 50, canvas.width, 15);
+            ctx.fillStyle = '#78350F';
+            ctx.fillRect(0, canvas.height - 35, canvas.width, 35);
+        }
+
+        // 무작위 다양한 지형 및 동전 생성기
+        function spawnTerrain() {
+            if (frameCount % 140 === 0) {
+                const types = ['building', 'wall', 'mountain', 'stair'];
+                const selectedType = types[Math.floor(Math.random() * types.length)];
+                
+                let platX = canvas.width;
+                let platW = 100 + Math.random() * 80;
+                let platH = 80 + Math.random() * 100;
+                let platY = canvas.height - 50 - platH;
+
+                platforms.push(new Platform(platX, platY, platW, platH, selectedType));
+
+                // 지형 위에 동전 여러 개 배치
+                const coinCount = 2 + Math.floor(Math.random() * 3);
+                for (let c = 0; c < coinCount; c++) {
+                    coinsList.push(new Coin(platX + 20 + (c * 25), platY - 20));
+                }
+
+                // 지형 위나 바닥에 장애물 확률 배치
+                if (Math.random() < 0.6) {
+                    const obsY = (Math.random() < 0.5) ? (platY - 30) : (canvas.height - 50 - 30);
+                    obstacles.push(new Obstacle(platX + platW / 2, obsY, 30, 30));
+                }
+            } else if (frameCount % 70 === 0 && Math.random() < 0.5) {
+                // 평지 공중에 가끔 떠 있는 동전
+                coinsList.push(new Coin(canvas.width, canvas.height - 100 - Math.random() * 80));
+            }
+        }
+
+        // 충돌 검사
+        function checkCollisions() {
+            // 동전 획득 검사
+            coinsList.forEach(c => {
+                if (!c.collected) {
+                    const dist = Math.hypot((pikachu.x + pikachu.width / 2) - c.x, (pikachu.y + pikachu.height / 2) - c.y);
+                    if (dist < pikachu.width / 2 + c.radius) {
+                        c.collected = true;
+                        coins++;
+                        score += 50;
+                        coinDisplay.textContent = coins;
+                        scoreDisplay.textContent = score;
+                        playSound('coin');
+                    }
+                }
+            });
+
+            // 장애물 충돌 검사
+            const pPad = 6;
+            for (let obs of obstacles) {
+                if (
+                    pikachu.x + pPad < obs.x + obs.width &&
+                    pikachu.x + pikachu.width - pPad > obs.x &&
+                    pikachu.y + pPad < obs.y + obs.height &&
+                    pikachu.y + pikachu.height - pPad > obs.y
+                ) {
+                    endGame();
+                    break;
+                }
+            }
+        }
+
+        // 메인 게임 루프
+        function gameLoop() {
+            if (!isGameRunning) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawBackground();
+
+            // 지형 및 요소 관리
+            spawnTerrain();
+
+            platforms.forEach((p, idx) => {
+                p.update();
+                p.draw();
+            });
+            platforms = platforms.filter(p => p.x + p.width > 0);
+
+            coinsList.forEach(c => {
+                c.update();
+                c.draw();
+            });
+            coinsList = coinsList.filter(c => c.x + c.radius > 0);
+
+            obstacles.forEach(o => {
+                o.update();
+                o.draw();
+            });
+            obstacles = obstacles.filter(o => o.x + o.width > 0);
+
+            // 피카츄 업데이트
+            pikachu.update(platforms);
+            pikachu.draw();
+
+            checkCollisions();
+
+            // 거리 점수 추가
+            frameCount++;
+            if (frameCount % 10 === 0) {
+                score++;
+                scoreDisplay.textContent = score;
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            isGameRunning = false;
+            stopBGM();
+            playSound('gameover');
+
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('pikachu_adv_high_score', highScore);
+                highScoreDisplay.textContent = highScore;
+            }
+
+            finalScore.textContent = `최종 점수: ${score}점`;
+            finalCoin.textContent = `획득한 동전: ${coins}개`;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function resetGame() {
+            score = 0;
+            coins = 0;
+            frameCount = 0;
+            platforms = [];
+            coinsList = [];
+            obstacles = [];
+            scoreDisplay.textContent = 0;
+            coinDisplay.textContent = 0;
+            pikachu.y = 280;
+            pikachu.velocityY = 0;
+            isGameRunning = true;
+            gameOverScreen.classList.add('hidden');
+            startBGM();
+            gameLoop();
+        }
+
+        // 이벤트 입출력
+        startBtn.addEventListener('click', () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            startOverlay.classList.add('hidden');
+            resetGame();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                if (isGameRunning) {
+                    pikachu.jump();
+                }
+            }
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (isGameRunning) {
+                pikachu.jump();
+            }
+        });
+
+        restartBtn.addEventListener('click', resetGame);
+    </script>
+</body>
+</html>
